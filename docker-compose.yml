@@ -1,0 +1,19 @@
+name: machine-unlearning
+
+services:
+  app:
+    build: .
+    image: machine-unlearning:latest
+    container_name: machine-unlearning-app
+    ports:
+      - "8000:8000"
+    environment:
+      # 每个切片重训后的人为延时（秒），便于演示慢重训期间受理新撤回
+      RETRAIN_SLICE_DELAY: "0.8"
+      DB_PATH: /data/unlearn.db
+    volumes:
+      - unlearn-data:/data
+    restart: unless-stopped
+
+volumes:
+  unlearn-data:

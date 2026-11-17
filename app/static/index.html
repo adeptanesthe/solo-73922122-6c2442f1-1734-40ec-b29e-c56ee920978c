@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>机器遗忘平台 · 指令/噪声分类器</title>
+<style>
+  :root {
+    --ok: #16a34a; --warn: #d97706; --stop: #ea580c; --fail: #dc2626;
+    --bg: #f1f5f9; --card: #ffffff; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { padding: 18px 24px; background: #0f172a; color: #fff; }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; font-size: 12px; color: #94a3b8; }
+  main { max-width: 1180px; margin: 0 auto; padding: 16px; }
+  .banner { border-radius: 10px; padding: 14px 18px; color: #fff; display: flex;
+            flex-wrap: wrap; gap: 8px 24px; align-items: center; margin-bottom: 14px; }
+  .banner .state { font-size: 18px; font-weight: 700; }
+  .banner .meta { font-size: 13px; opacity: .92; }
+  .READY { background: var(--ok); } .RETRAINING { background: var(--warn); }
+  .STOPPED { background: var(--stop); } .FAILED { background: var(--fail); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 14px 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 15px; }
+  .card h2 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  button { border: 0; border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+           background: #2563eb; color: #fff; }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { background: #cbd5e1; cursor: not-allowed; }
+  button.danger { background: #dc2626; }
+  button.ghost { background: #e2e8f0; color: #0f172a; }
+  input[type=text], input[type=number] { width: 90px; padding: 6px 8px; border: 1px solid var(--line);
+           border-radius: 6px; font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .result { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; display: none; }
+  .result.show { display: block; }
+  .result.ok { background: #dcfce7; color: #14532d; }
+  .result.err { background: #fee2e2; color: #7f1d1d; }
+  .bar { height: 10px; background: #e2e8f0; border-radius: 5px; overflow: hidden; margin: 8px 0 4px; }
+  .bar > div { height: 100%; background: #2563eb; width: 0%; transition: width .3s; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; }
+  .pill.ok { background: #dcfce7; color: #166534; }
+  .pill.bad { background: #fee2e2; color: #991b1b; }
+  .pill.gray { background: #e2e8f0; color: #475569; }
+  .big { font-size: 22px; font-weight: 700; }
+  details summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+  .scroll { max-height: 320px; overflow: auto; }
+  tr.off td { color: #94a3b8; text-decoration: line-through; }
+  .errtext { color: var(--fail); font-size: 12.5px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>机器遗忘平台 · 指令/噪声分类器</h1>
+  <p>SISA 分片遗忘：3 片 × 4 有序切片 × 5 样本 ｜ 逻辑回归零初始化 ｜ SGD lr=0.1 动量=0.9 单遍逐样本 ｜ 预测=三片概率均值</p>
+</header>
+<main>
+  <div id="banner" class="banner STOPPED">
+    <span class="state" id="bannerState">加载中…</span>
+    <span class="meta" id="bannerMeta"></span>
+    <span class="meta" id="bannerNote"></span>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>预测 <small>输入四维特征，输出三片平均概率</small></h2>
+        <div class="row">
+          <input type="text" id="f0" placeholder="特征1" value="1.0">
+          <input type="text" id="f1" placeholder="特征2" value="-0.5">
+          <input type="text" id="f2" placeholder="特征3" value="0.2">
+          <input type="text" id="f3" placeholder="特征4" value="0.8">
+          <button onclick="doPredict()">预测</button>
+          <button class="ghost" onclick="fillRandom()">随机活跃样本</button>
+        </div>
+        <div id="predResult" class="result"></div>
+      </div>
+
+      <div class="card">
+        <h2>贡献者 <small>永久撤回：只重训受影响片，操作不可撤销</small></h2>
+        <table>
+          <thead><tr><th>贡献者</th><th>活跃/总数</th><th>状态</th><th></th></tr></thead>
+          <tbody id="contributors"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>重训进度 <small>慢重训期间仍可提交新撤回</small></h2>
+        <div id="progressMsg" class="muted">—</div>
+        <div class="bar"><div id="progressBar"></div></div>
+        <div class="row" style="margin-top:8px">
+          <button id="retryBtn" class="danger" style="display:none" onclick="doRetry()">重试重训</button>
+          <span id="retryHint" class="muted"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>对照校验 <small>实际参数 vs 剔除全部已撤回样本后从头训练（float64）</small></h2>
+        <div id="verification">—</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>重训历史 <small>含实际重训切片与对照误差</small></h2>
+        <div class="scroll">
+        <table>
+          <thead><tr><th>轮次</th><th>状态</th><th>消除的撤回</th><th>实际重训切片</th><th>对照误差</th><th>时间</th></tr></thead>
+          <tbody id="rounds"></tbody>
+        </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <details open>
+          <summary>样本集（60 条，3 片 × 4 切片）</summary>
+          <div class="scroll" style="margin-top:8px">
+          <table>
+            <thead><tr><th>ID</th><th>贡献者</th><th>片</th><th>切片</th><th>标签</th><th>特征</th><th>状态</th></tr></thead>
+            <tbody id="samples"></tbody>
+          </table>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+let STATUS = null;
+
+function fmtErr(e) { return e <= 0 ? "0.0" : e.toExponential(2); }
+
+function fmtAffected(affected) {
+  const parts = [];
+  for (let s = 1; s <= 3; s++) {
+    const arr = affected[String(s)];
+    if (arr && arr.length) {
+      parts.push(`片${s}: 切片${arr[0]}–${arr[arr.length-1]}`);
+    } else {
+      parts.push(`片${s}: 未训练`);
+    }
+  }
+  return parts.join("；");
+}
+
+async function fetchStatus() {
+  try {
+    const r = await fetch("/api/status");
+    STATUS = await r.json();
+    render();
+  } catch (e) { /* 网络抖动时保持旧画面 */ }
+}
+
+function render() {
+  const s = STATUS;
+  const banner = document.getElementById("banner");
+  banner.className = "banner " + s.state;
+  document.getElementById("bannerState").textContent = s.state_label;
+  document.getElementById("bannerMeta").textContent =
+    `代际 ${s.generation} ｜ 活跃样本 ${s.stats.active_samples}/${s.stats.total_samples} ｜ ` +
+    `撤回 ${s.stats.total_withdrawals} 笔（待消除 ${s.stats.pending_withdrawals}）`;
+  document.getElementById("bannerNote").textContent = s.state_note || "";
+
+  // 贡献者
+  document.getElementById("contributors").innerHTML = s.contributors.map(c => {
+    const active = c.total - c.withdrawn;
+    const done = active === 0;
+    return `<tr>
+      <td>${c.name}</td><td>${active}/${c.total}</td>
+      <td>${done ? '<span class="pill bad">已撤回</span>' : '<span class="pill ok">活跃</span>'}</td>
+      <td><button class="danger" ${done ? "disabled" : ""}
+        onclick="doWithdraw('${c.name}', ${active})">永久撤回</button></td>
+    </tr>`;
+  }).join("");
+
+  // 进度
+  const p = s.progress || {};
+  const pct = p.total_units ? Math.round(100 * (p.done_units || 0) / p.total_units) : 0;
+  document.getElementById("progressBar").style.width =
+    (s.state === "RETRAINING" ? pct : (s.state === "READY" ? 100 : pct)) + "%";
+  document.getElementById("progressMsg").textContent =
+    p.message || (s.state === "READY" ? "空闲" : "—");
+  const needRetry = (s.state === "FAILED" || s.state === "STOPPED");
+  document.getElementById("retryBtn").style.display = needRetry ? "" : "none";
+  document.getElementById("retryHint").textContent =
+    s.state === "FAILED" ? "重训失败或被重启打断，保持停供，可重试。"
+    : (s.state === "STOPPED" ? "存在待消除的撤回，等待重训。" : "");
+
+  // 校验
+  const v = s.verification;
+  if (v) {
+    document.getElementById("verification").innerHTML =
+      `<div class="row"><span class="big ${v.ok ? "" : "errtext"}">${fmtErr(v.max_error)}</span>
+       <span class="pill ${v.ok ? "ok" : "bad"}">${v.ok ? "✓ ≤ 1e-10，与从头训练一致" : "✗ 超过阈值 1e-10"}</span></div>
+       <div class="muted" style="margin-top:6px">分片误差：` +
+      Object.entries(v.per_shard).map(([k, val]) => `片${k}: ${fmtErr(val)}`).join(" ｜ ") +
+      `</div>`;
+  } else {
+    const last = s.rounds.find(r => r.status === "done");
+    document.getElementById("verification").innerHTML =
+      `<span class="pill gray">停供中，以最近一轮为准</span> ` +
+      (last ? `第 ${last.id} 轮对照误差 <b>${fmtErr(last.max_error ?? 0)}</b>` : "尚无完成的轮次");
+  }
+
+  // 历史
+  document.getElementById("rounds").innerHTML = s.rounds.map(r => {
+    const st = r.status === "done" ? '<span class="pill ok">完成</span>'
+             : r.status === "failed" ? '<span class="pill bad">失败</span>'
+             : '<span class="pill gray">进行中</span>';
+    return `<tr><td>#${r.id}</td><td>${st}</td>
+      <td>${(r.withdrawals || []).join(", ")}</td>
+      <td>${fmtAffected(r.affected || {})}</td>
+      <td>${r.max_error == null ? "—" : fmtErr(r.max_error)}</td>
+      <td class="muted">${(r.started_at || "").replace("T", " ").slice(5, 19)}</td></tr>`;
+  }).join("") || '<tr><td colspan="6" class="muted">暂无重训轮次</td></tr>';
+
+  // 样本
+  document.getElementById("samples").innerHTML = s.samples.map(t =>
+    `<tr class="${t.withdrawn ? "off" : ""}">
+      <td>${t.id}</td><td>${t.contributor}</td><td>${t.shard}</td><td>${t.slice}</td>
+      <td>${t.label === 1 ? "指令" : "噪声"}</td>
+      <td class="muted">${t.x.map(v => v.toFixed(2)).join(", ")}</td>
+      <td>${t.withdrawn ? "已撤回" : "活跃"}</td></tr>`
+  ).join("");
+}
+
+async function doPredict() {
+  const box = document.getElementById("predResult");
+  const feats = [0, 1, 2, 3].map(i => parseFloat(document.getElementById("f" + i).value));
+  if (feats.some(v => !isFinite(v))) {
+    box.className = "result show err"; box.textContent = "请输入 4 个有效数字"; return;
+  }
+  const r = await fetch("/api/predict", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ features: feats }),
+  });
+  if (r.status === 200) {
+    const d = await r.json();
+    box.className = "result show ok";
+    box.innerHTML = `预测：<b>${d.label_name}</b>（平均概率 ${d.probability.toFixed(4)}）<br>` +
+      `<span class="muted">三片概率：${d.shard_probabilities.map((p, i) => `片${i+1}=${p.toFixed(4)}`).join("，")}</span>`;
+  } else {
+    const d = await r.json().catch(() => ({ detail: "请求失败" }));
+    box.className = "result show err";
+    box.textContent = `已拒绝（${r.status}）：${d.detail}`;
+  }
+  fetchStatus();
+}
+
+function fillRandom() {
+  if (!STATUS) return;
+  const act = STATUS.samples.filter(t => !t.withdrawn);
+  if (!act.length) return;
+  const t = act[Math.floor(Math.random() * act.length)];
+  t.x.forEach((v, i) => document.getElementById("f" + i).value = v.toFixed(4));
+}
+
+async function doWithdraw(name, active) {
+  if (!confirm(`确认永久撤回 ${name} 的 ${active} 条样本？\n撤回后立即停供，仅重训受影响片，操作不可撤销。`)) return;
+  const r = await fetch("/api/withdraw", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contributor: name }),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({ detail: "失败" }));
+    alert(`撤回失败：${d.detail}`);
+  }
+  fetchStatus();
+}
+
+async function doRetry() {
+  await fetch("/api/retry", { method: "POST" });
+  fetchStatus();
+}
+
+fetchStatus();
+setInterval(fetchStatus, 1000);
+</script>
+</body>
+</html>
